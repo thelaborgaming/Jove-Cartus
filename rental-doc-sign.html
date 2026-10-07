@@ -134,28 +134,50 @@ var state = { mode: 'draw', inked: false };
 
 function show(id) { ['loading', 'message', 'main'].forEach(function (x) { $(x).classList.toggle('hidden', x !== id); }); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
-function message(kind, title, text) {
+function message(kind, title, text, retry) {
   var icon = kind === 'ok' ? '<div class="tick">&#10003;</div>' : kind === 'warn' ? '<div class="warn">!</div>' : '';
-  $('message').innerHTML = icon + '<h2>' + esc(title) + '</h2><p class="sub" style="margin-top:6px">' + esc(text) + '</p>';
+  $('message').innerHTML = icon + '<h2>' + esc(title) + '</h2><p class="sub" style="margin-top:6px">' + esc(text) + '</p>' + (retry ? '<button class="btn" id="retryBtn" type="button">Try again</button>' : '');
   show('message');
+  if (retry && $('retryBtn')) $('retryBtn').addEventListener('click', function () { show('loading'); load(); });
 }
-function post(path, body) {
-  return fetch(BASE + '/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), cache: 'no-store' })
-    .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { j._status = r.status; return j; }); });
+function post(path, body, ms) {
+  var ctl = ('AbortController' in window) ? new AbortController() : null;
+  var timer = ctl ? setTimeout(function () { ctl.abort(); }, ms || 45000) : null;
+  return fetch(BASE + '/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), cache: 'no-store', signal: ctl ? ctl.signal : undefined })
+    .then(function (r) { if (timer) clearTimeout(timer); return r.json().catch(function () { return {}; }).then(function (j) { j._status = r.status; return j; }); },
+      function (e) { if (timer) clearTimeout(timer); throw e; });
 }
+/* Quiet error reporting so problems on a signer's phone reach the sender (never blocks signing). */
+var reported = 0;
+function report(event, detail) {
+  try {
+    if (token.length < 20 || reported >= 6) return;
+    reported++;
+    var env = ' | ' + (screen.width || 0) + 'x' + (screen.height || 0) + ' vp ' + (window.innerWidth || 0) + 'x' + (window.innerHeight || 0) + ' dpr ' + (window.devicePixelRatio || 1);
+    fetch(BASE + '/cartus-sign-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: token, event: event, detail: (String(detail || '') + env).slice(0, 390) }), keepalive: true }).catch(function () {});
+  } catch (e) { /* ignore */ }
+}
+window.addEventListener('error', function (e) { report('js_error', (e.message || 'error') + ' @' + String(e.filename || '').split('/').pop() + ':' + (e.lineno || 0)); });
+window.addEventListener('unhandledrejection', function (e) { report('js_error', 'promise: ' + String((e.reason && e.reason.message) || e.reason || '').slice(0, 200)); });
 
 /* ---------- load ---------- */
 function load() {
   if (token.length < 20) { return message('warn', 'This link is not valid', 'Please use the full link you were sent, or ask for a new one.'); }
   post('cartus-sign-load', { token: token }).then(function (d) {
+    if (d && d._status >= 500) { throw new Error('HTTP ' + d._status); }
     if (!d || d.ok === false) { return message('warn', 'This link is not valid', (d && d.error) || 'Please ask for a new link.'); }
+    if (d.state && d.state !== 'pending' && d.state !== 'signed' && d.state !== 'expired') { report('load_state', d.state + (d.error ? ': ' + d.error : '')); }
     if (d.state === 'signed') { return message('ok', 'Already signed', 'You have already signed these documents. Thank you.'); }
     if (d.state === 'expired') { return message('warn', 'This link has expired', 'Please ask for a new signing link.'); }
     if (d.state === 'cancelled') { return message('warn', 'This request was cancelled', 'Please contact the sender if you think this is a mistake.'); }
     if (d.state === 'changed') { return message('warn', 'These documents were updated', 'A document changed after this link was created. Please ask for a new link so you sign the latest version.'); }
     if (d.state !== 'pending' || !d.docs || !d.docs.length) { return message('warn', 'Nothing to sign', (d.error) || 'Please ask for a new link.'); }
     render(d);
-  }).catch(function () { message('warn', 'Could not load the documents', 'Please check your connection and refresh this page.'); });
+  }).catch(function (e) {
+    if (!load.retried) { load.retried = true; return setTimeout(load, 2500); }
+    report('load_failed', (e && e.name) + ': ' + (e && e.message));
+    message('warn', 'Could not load the documents', 'Please check your connection and try again.', true);
+  });
 }
 
 function render(d) {
@@ -249,14 +271,15 @@ $('submit').addEventListener('click', function () {
   if (!nm) { err.textContent = 'Please enter your full name.'; return; }
   var go = function () {
     var png = state.mode === 'draw' ? trimmed(cv) : trimmed(typedCanvas(nm));
-    if (!png) { err.textContent = 'Please add a clearer signature.'; btn.disabled = false; return; }
+    if (!png) { report('pad_issue', 'signature empty/too small after trim, mode ' + state.mode); err.textContent = 'Please add a clearer signature.'; btn.disabled = false; return; }
     btn.disabled = true; btn.textContent = 'Signing…';
-    post('cartus-sign-submit', { token: token, signature_base64: png, signer_name: nm, agree: true }).then(function (d) {
+    post('cartus-sign-submit', { token: token, signature_base64: png, signer_name: nm, agree: true }, 90000).then(function (d) {
       if (d && d.ok) { return message('ok', 'Signed - thank you', 'Your signature has been added. You can close this page.'); }
       if (d && d.state === 'already') { return message('ok', 'Already signed', 'You have already signed. Thank you.'); }
       if (d && (d.state === 'expired' || d.state === 'cancelled')) { return message('warn', d.state === 'expired' ? 'This link has expired' : 'This request was cancelled', d.error || ''); }
+      report('submit_failed', 'HTTP ' + (d && d._status) + ' ' + ((d && (d.error || d.state)) || 'no message'));
       err.textContent = (d && d.error) || 'Something went wrong. Please try again.'; btn.disabled = false; btn.textContent = 'Sign documents';
-    }).catch(function () { err.textContent = 'Network problem. Please try again.'; btn.disabled = false; btn.textContent = 'Sign documents'; });
+    }).catch(function (e) { report('submit_failed', 'network ' + (e && e.name) + ': ' + (e && e.message)); err.textContent = 'Network problem. Please try again - if you already signed, you will be told so.'; btn.disabled = false; btn.textContent = 'Sign documents'; });
   };
   if (state.mode === 'type' && document.fonts && document.fonts.load) { document.fonts.load('600 120px Caveat').then(go, go); } else { go(); }
 });
