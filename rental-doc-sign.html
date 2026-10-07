@@ -55,7 +55,9 @@ input[type=text]:focus{outline:2px solid var(--accent);outline-offset:1px;border
 .tabs button{font:inherit;font-weight:700;font-size:13px;border:0;background:transparent;color:var(--muted);padding:7px 16px;border-radius:8px;cursor:pointer}
 .tabs button[aria-selected=true]{background:var(--surface);color:var(--text);box-shadow:0 1px 2px rgba(18,24,38,.12)}
 .padbox{position:relative;border:1.5px dashed var(--border);border-radius:12px;background:#fff;height:190px;touch-action:none}
-.padbox canvas{position:absolute;inset:0;width:100%;height:100%;border-radius:12px;cursor:crosshair}
+.padbox canvas{position:absolute;inset:0;width:100%;height:100%;border-radius:12px;cursor:crosshair;touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+.padbox{-webkit-user-select:none;user-select:none;overscroll-behavior:contain}
+body.drawing{overflow:hidden;overscroll-behavior:none}
 .padbox .hint{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;color:#9aa3b5;font-size:13px;pointer-events:none}
 .padbox .line{position:absolute;left:5%;right:5%;bottom:38px;border-bottom:1px solid #d4d9e5;pointer-events:none}
 .typed{display:none}
@@ -195,9 +197,12 @@ function sizePad() {
   if (keep) { var im = new Image(); im.onload = function () { ctx.drawImage(im, 0, 0, r.width, r.height); }; im.src = keep; }
 }
 function pt(e) { var r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
-cv.addEventListener('pointerdown', function (e) { drawing = true; last = pt(e); cv.setPointerCapture(e.pointerId); ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(last.x + .01, last.y + .01); ctx.stroke(); markInk(); e.preventDefault(); });
+cv.addEventListener('pointerdown', function (e) { drawing = true; document.body.classList.add('drawing'); last = pt(e); cv.setPointerCapture(e.pointerId); ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(last.x + .01, last.y + .01); ctx.stroke(); markInk(); e.preventDefault(); });
 cv.addEventListener('pointermove', function (e) { if (!drawing) return; var p = pt(e); ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke(); last = p; e.preventDefault(); });
-['pointerup', 'pointercancel', 'pointerleave'].forEach(function (n) { cv.addEventListener(n, function () { drawing = false; }); });
+['pointerup', 'pointercancel'].forEach(function (n) { cv.addEventListener(n, function () { drawing = false; document.body.classList.remove('drawing'); }); });
+// Keep the page still while signing: block touch scrolling/zooming on the pad (needs non-passive listeners; iOS ignores touch-action alone).
+['touchstart', 'touchmove', 'touchend'].forEach(function (n) { cv.addEventListener(n, function (e) { e.preventDefault(); }, { passive: false }); });
+cv.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 function markInk() { if (!state.inked) { state.inked = true; $('padHint').classList.add('hidden'); update(); } }
 $('clear').addEventListener('click', function () { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height); ctx.restore(); state.inked = false; $('padHint').classList.remove('hidden'); update(); });
 window.addEventListener('resize', function () { if (!$('main').classList.contains('hidden')) sizePad(); });
