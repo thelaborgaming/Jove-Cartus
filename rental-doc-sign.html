@@ -23,9 +23,6 @@
   --serif:'Source Serif 4',Georgia,'Times New Roman',serif;
   --ink:#0b1f5c;
 }
-@media (prefers-color-scheme:dark){
-  :root{ color-scheme:dark; --bg:#0c1324; --surface:#141f38; --text:#e8edf9; --muted:#a3b0ce; --border:#2a3a5e; --border-strong:#4a5c85; --accent:#6c98ff; --accent-hover:#8baeff; --accent-bg:#1a2744; --ok:#3fcb8b; --ok-bg:#12302a; --danger:#ff8582; --danger-bg:#3a1c19; --ink:#0b1f5c; }
-}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{-webkit-text-size-adjust:100%}
 body{font-family:'Public Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text);font-size:15px;line-height:1.5;min-height:100vh;padding-bottom:env(safe-area-inset-bottom)}
@@ -83,7 +80,6 @@ body.drawing{overflow:hidden;overscroll-behavior:none}
 .btn:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .btn{color:#fff}
-@media (prefers-color-scheme:dark){.btn{color:#0c1324}}
 .err{color:var(--danger);font-size:13.5px;margin-top:10px;min-height:20px}
 .note{font-size:12px;color:var(--muted);margin-top:12px}
 .hidden{display:none!important}
