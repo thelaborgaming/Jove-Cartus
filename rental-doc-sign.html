@@ -51,6 +51,14 @@ p.sub{color:var(--muted);font-size:14px}
 .pages{display:none;padding:0 12px 12px;background:var(--bg)}
 .doc.open .pages{display:block}
 .pages img{display:block;width:100%;height:auto;margin:12px auto 0;border:1px solid var(--border);border-radius:6px;background:#fff}
+.pg{position:relative;margin:12px auto 0}
+.pg img{margin:0!important}
+.mk{position:absolute;box-sizing:border-box;border:2px dashed var(--accent);background:rgba(37,99,235,.10);border-radius:4px;display:flex;align-items:center;justify-content:center;font:700 11px/1 system-ui,sans-serif;color:var(--accent);pointer-events:none;overflow:hidden}
+.mk.date{border-style:dotted;background:rgba(0,0,0,.04);color:#334;font-weight:600}
+.dtabs{display:flex;gap:8px;margin-bottom:12px}
+.dtabs button{font:inherit;font-weight:700;font-size:13.5px;border:1px solid var(--border-strong);background:var(--surface);color:var(--text);border-radius:999px;padding:9px 14px;min-height:40px;cursor:pointer;touch-action:manipulation}
+.dtabs button[aria-selected=true]{background:var(--accent);border-color:var(--accent);color:#fff}
+.cmtnote{font-size:12.5px;color:var(--muted);margin:0 0 10px}
 .pagenum{font-size:11.5px;color:var(--muted);text-align:center;margin-top:4px}
 label.f{display:block;font-size:12.5px;font-weight:700;color:var(--muted);margin-bottom:5px}
 input[type=text]{width:100%;font:inherit;font-size:16px;padding:11px 12px;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface);color:var(--text)}
@@ -101,7 +109,9 @@ body.drawing{overflow:hidden;overscroll-behavior:none}
     <div class="card">
       <h2>1. Review the documents</h2>
       <p class="sub" style="margin-bottom:12px">Tap a document to read it. You are signing the version shown here.</p>
+      <div class="dtabs hidden" id="dtabs" role="tablist"><button type="button" role="tab" id="dtDocs" aria-selected="true">Documents to sign</button><button type="button" role="tab" id="dtCmt" aria-selected="false">Read the comments</button></div>
       <div id="docs"></div>
+      <div id="cmts" class="hidden"></div>
     </div>
 
     <div class="card">
@@ -190,10 +200,11 @@ function load() {
   });
 }
 
+function mainCount(d) { return d.docs.filter(function (x) { return !x.readOnly; }).length; }
 function render(d) {
   var roleLabel = ROLE[d.role] || 'Signer';
   $('hello').textContent = 'Hello' + (d.signerName ? ', ' + d.signerName : '');
-  $('intro').textContent = 'Please review and sign ' + d.docs.length + ' document' + (d.docs.length > 1 ? 's' : '') + (d.clientName ? ' for ' + d.clientName : '') + (d.property ? ' (' + d.property + ')' : '') + '. You are signing as ' + roleLabel + '.';
+  $('intro').textContent = 'Please review and sign ' + mainCount(d) + ' document' + (mainCount(d) > 1 ? 's' : '') + (d.clientName ? ' for ' + d.clientName : '') + (d.property ? ' (' + d.property + ')' : '') + '. You are signing as ' + roleLabel + '.';
   var chips = '';
   Object.keys(d.progress || {}).forEach(function (r) {
     var s = d.progress[r] === 'signed';
@@ -201,16 +212,31 @@ function render(d) {
   });
   $('chips').innerHTML = chips;
   $('nm').value = d.signerName || '';
-  var html = '';
-  d.docs.forEach(function (doc, i) {
-    var shown = doc.key === 'cdd' ? (doc.pages || []).slice(0, 1) : (doc.pages || []);
-    var pages = shown.map(function (p) {
-      return '<img alt="' + esc(doc.label) + ' page ' + esc(p.n) + '" loading="lazy" src="data:image/jpeg;base64,' + p.jpeg_base64 + '" width="' + (p.width || '') + '" height="' + (p.height || '') + '"><div class="pagenum">Page ' + esc(p.n) + ' of ' + shown.length + '</div>';
+  var html = '', cm = '', mainDocs = d.docs.filter(function (x) { return !x.readOnly; }), cmtDocs = d.docs.filter(function (x) { return x.readOnly; });
+  function pagesHtml(doc, shown) {
+    var f = doc.fields || [], dpi = doc.dpi || 110;
+    return shown.map(function (p) {
+      var mk = f.filter(function (q) { return q.page === p.n && p.width && p.height; }).map(function (q) {
+        var k = dpi / 72;
+        return '<i class="mk' + (q.kind === 'date' ? ' date' : '') + '" style="left:' + (q.x * k / p.width * 100) + '%;top:' + (q.y * k / p.height * 100) + '%;width:' + (q.w * k / p.width * 100) + '%;height:' + (q.h * k / p.height * 100) + '%">' + (q.kind === 'date' ? 'Date (automatic)' : 'Sign here') + '</i>';
+      }).join('');
+      return '<div class="pg"><img alt="' + esc(doc.label) + ' page ' + esc(p.n) + '" loading="lazy" src="data:image/jpeg;base64,' + p.jpeg_base64 + '" width="' + (p.width || '') + '" height="' + (p.height || '') + '">' + mk + '</div><div class="pagenum">Page ' + esc(p.n) + ' of ' + shown.length + '</div>';
     }).join('');
-    html += '<div class="doc' + (i === 0 ? ' open' : '') + '"><button type="button" aria-expanded="' + (i === 0) + '"><span class="chev">&#9656;</span><span>' + esc(doc.label) + '</span><span class="meta">' + shown.length + ' page' + (shown.length === 1 ? '' : 's') + '</span></button><div class="pages">' + pages + '</div></div>';
-  });
+  }
+  function docHtml(doc, i) {
+    var shown = doc.key === 'cdd' ? (doc.pages || []).slice(0, 1) : (doc.pages || []);
+    var nf = (doc.fields || []).filter(function (q) { return q.kind === 'sig'; }).length;
+    return '<div class="doc' + (i === 0 ? ' open' : '') + '"><button type="button" aria-expanded="' + (i === 0) + '"><span class="chev">&#9656;</span><span>' + esc(doc.label) + '</span><span class="meta">' + shown.length + ' page' + (shown.length === 1 ? '' : 's') + (nf ? ' &middot; ' + nf + ' to sign' : '') + '</span></button><div class="pages">' + pagesHtml(doc, shown) + '</div></div>';
+  }
+  mainDocs.forEach(function (doc, i) { html += docHtml(doc, i); });
+  cmtDocs.forEach(function (doc) { cm += '<p class="cmtnote">Notes on the tenancy agreement, for you only. Reading them is optional and does not change what you sign.</p>' + docHtml(doc, 0); });
   $('docs').innerHTML = html;
-  Array.prototype.forEach.call($('docs').querySelectorAll('.doc>button'), function (b) {
+  $('cmts').innerHTML = cm;
+  $('dtabs').classList.toggle('hidden', !cmtDocs.length);
+  function tab(c) { $('docs').classList.toggle('hidden', c); $('cmts').classList.toggle('hidden', !c); $('dtDocs').setAttribute('aria-selected', String(!c)); $('dtCmt').setAttribute('aria-selected', String(c)); }
+  $('dtDocs').onclick = function () { tab(false); }; $('dtCmt').onclick = function () { tab(true); };
+  tab(false);
+  Array.prototype.forEach.call(document.querySelectorAll('#docs .doc>button, #cmts .doc>button'), function (b) {
     b.addEventListener('click', function () { var o = b.parentNode.classList.toggle('open'); b.setAttribute('aria-expanded', o); });
   });
   show('main');
