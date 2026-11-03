@@ -95,6 +95,7 @@ body.drawing{overflow:hidden;overscroll-behavior:none}
 <div class="wrap">
   <main>
 
+  <div id="pinview" class="card hidden"><h2>Enter your PIN</h2><p class="sub" style="margin-top:6px">Enter the 6-digit PIN you were given separately from this link to open your documents.</p><label class="f" for="pin" style="margin-top:16px">PIN</label><input id="pin" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]*" aria-describedby="pinerr" placeholder="6 digits"><div class="err" id="pinerr" role="alert"></div><button class="btn" id="pinbtn" type="button">Continue</button><p class="note">After 5 wrong tries this link locks and you will need a new one.</p></div>
   <div id="loading" class="card center" role="status" aria-live="polite"><div class="spinner" aria-hidden="true"></div><h2>Preparing your documents&hellip;</h2><p class="sub">This can take a few seconds.</p></div>
 
   <div id="message" class="card center hidden" role="status" aria-live="polite"></div>
@@ -151,8 +152,9 @@ var token = (new URLSearchParams(location.search).get('t') || '').trim();
 var ROLE = { tenant: 'Tenant', landlord: 'Landlord', landlord2: 'Landlord 2', cobroke: 'Co-broke agent' };
 var $ = function (id) { return document.getElementById(id); };
 var state = { mode: 'draw', inked: false };
+var pin = '';
 
-function show(id) { ['loading', 'message', 'main'].forEach(function (x) { $(x).classList.toggle('hidden', x !== id); }); }
+function show(id) { ['loading', 'message', 'main', 'pinview'].forEach(function (x) { $(x).classList.toggle('hidden', x !== id); }); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 function message(kind, title, text, retry) {
   var icon = kind === 'ok' ? '<div class="tick">&#10003;</div>' : kind === 'warn' ? '<div class="warn">!</div>' : '';
@@ -180,11 +182,25 @@ function report(event, detail) {
 window.addEventListener('error', function (e) { report('js_error', (e.message || 'error') + ' @' + String(e.filename || '').split('/').pop() + ':' + (e.lineno || 0)); });
 window.addEventListener('unhandledrejection', function (e) { report('js_error', 'promise: ' + String((e.reason && e.reason.message) || e.reason || '').slice(0, 200)); });
 
+/* ---------- PIN ---------- */
+function askPin(err) {
+  $('pinerr').textContent = err || ''; $('pin').value = ''; show('pinview'); try { $('pin').focus(); } catch (e) { /* ignore */ }
+}
+function submitPin() {
+  var v = $('pin').value.replace(/\D/g, '');
+  if (v.length < 6) { $('pinerr').textContent = 'Enter all 6 digits.'; return; }
+  pin = v; $('pinerr').textContent = ''; show('loading'); load();
+}
+$('pinbtn').addEventListener('click', submitPin);
+$('pin').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submitPin(); } });
+
 /* ---------- load ---------- */
 function load() {
   if (token.length < 20) { return message('warn', 'This link is not valid', 'Please use the full link you were sent, or ask for a new one.'); }
-  post('cartus-sign-load', { token: token }).then(function (d) {
+  post('cartus-sign-load', { token: token, pin: pin }).then(function (d) {
     if (d && d._status >= 500) { throw new Error('HTTP ' + d._status); }
+    if (d && d.locked) { return message('warn', 'Link locked', 'Too many wrong PINs. Please ask for a new link.'); }
+    if (d && d.pinRequired) { askPin(pin ? d.error : ''); return; }
     if (!d || d.ok === false) { return message('warn', 'This link is not valid', (d && d.error) || 'Please ask for a new link.'); }
     if (d.state && d.state !== 'pending' && d.state !== 'signed' && d.state !== 'expired') { report('load_state', d.state + (d.error ? ': ' + d.error : '')); }
     if (d.state === 'signed') { return message('ok', 'Already signed', 'You have already signed these documents. Thank you.'); }
@@ -317,8 +333,10 @@ $('submit').addEventListener('click', function () {
     var png = state.mode === 'draw' ? trimmed(cv) : trimmed(typedCanvas(nm));
     if (!png) { report('pad_issue', 'signature empty/too small after trim, mode ' + state.mode); err.textContent = 'Please add a clearer signature.'; btn.disabled = false; return; }
     btn.disabled = true; btn.textContent = 'Signing…';
-    post('cartus-sign-submit', { token: token, signature_base64: png, signer_name: nm, agree: true }, 90000).then(function (d) {
+    post('cartus-sign-submit', { token: token, pin: pin, signature_base64: png, signer_name: nm, agree: true }, 90000).then(function (d) {
       if (d && d.ok) { return message('ok', 'Signed - thank you', 'Your signature has been added. You can close this page.'); }
+      if (d && d.state === 'locked') { return message('warn', 'Link locked', 'Too many wrong PINs. Please ask for a new link.'); }
+      if (d && d.state === 'badpin') { pin = ''; return askPin('Your PIN was not accepted. Enter it again.'); }
       if (d && d.state === 'already') { return message('ok', 'Already signed', 'You have already signed. Thank you.'); }
       if (d && (d.state === 'expired' || d.state === 'cancelled')) { return message('warn', d.state === 'expired' ? 'This link has expired' : 'This request was cancelled', d.error || ''); }
       report('submit_failed', 'HTTP ' + (d && d._status) + ' ' + ((d && (d.error || d.state)) || 'no message'));
