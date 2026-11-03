@@ -224,7 +224,7 @@ function render(d) {
     }).join('');
   }
   function docHtml(doc, i) {
-    var shown = doc.key === 'cdd' ? (doc.pages || []).slice(0, 1) : (doc.pages || []);
+    var shown = (doc.key === 'cdd' && !(doc.fields || []).length) ? (doc.pages || []).slice(0, 1) : (doc.pages || []);
     var nf = (doc.fields || []).filter(function (q) { return q.kind === 'sig'; }).length;
     return '<div class="doc' + (i === 0 ? ' open' : '') + '"><button type="button" aria-expanded="' + (i === 0) + '"><span class="chev">&#9656;</span><span>' + esc(doc.label) + '</span><span class="meta">' + shown.length + ' page' + (shown.length === 1 ? '' : 's') + (nf ? ' &middot; ' + nf + ' to sign' : '') + '</span></button><div class="pages">' + pagesHtml(doc, shown) + '</div></div>';
   }
